@@ -1,0 +1,158 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# 1. Define the System to be Controlled (Plant Model)
+# Let's simulate a simple mass-spring-damper system: G(s) = 1 / (s^2 + 10s + 20)
+def simulate_system(Kp, Ki, Kd, dt=0.01, t_end=10.0, setpoint=1.0):
+    time_steps = int(t_end / dt)
+    t = np.linspace(0, t_end, time_steps)
+    
+    # System states (y = position, v = velocity)
+    y = 0.0
+    v = 0.0
+    
+    # PID variables
+    integral_error = 0.0
+    prev_error = 0.0
+    
+    y_history = []
+    error_history = []
+    
+    for step in range(time_steps):
+        error = setpoint - y
+        integral_error += error * dt
+        derivative_error = (error - prev_error) / dt
+        
+        # PID Control signal
+        u = (Kp * error) + (Ki * integral_error) + (Kd * derivative_error)
+        # Saturation limits for control signal
+        u = np.clip(u, -50, 50)
+        
+        # System Dynamics (Differential Equations physics)
+        # acceleration = (Force - b*v - k*y) / m
+        # Here: m = 1, b = 10, k = 20, Force = Control Signal u
+        a = u - 10 * v - 20 * y
+        
+        # Euler Integration
+        v += a * dt
+        y += v * dt
+        
+        prev_error = error
+        y_history.append(y)
+        error_history.append(error)
+        
+    return t, np.array(y_history), np.array(error_history)
+
+# 2. Fitness Function (Integral Time Absolute Error - ITAE)
+def fitness_function(params):
+    Kp, Ki, Kd = params
+    # Penalize negative parameters heavily
+    if Kp < 0 or Ki < 0 or Kd < 0:
+        return 1e6
+        
+    t, y_hist, err_hist = simulate_system(Kp, Ki, Kd)
+    
+    # ITAE = Integral of (t * |e(t)|)
+    itae = np.sum(t * np.abs(err_hist))
+    
+    # Add penalty for extreme overshoot
+    overshoot = max(0, np.max(y_hist) - 1.0)
+    
+    return itae + (overshoot * 1000)
+
+# 3. Grey Wolf Optimizer (GWO)
+def grey_wolf_optimizer(obj_func, num_variables=3, lb=[0, 0, 0], ub=[100, 100, 10], num_wolves=15, max_iter=30):
+    # Initialize alpha, beta, and delta positions and their fitness
+    Alpha_pos = np.zeros(num_variables)
+    Alpha_score = float("inf")
+    
+    Beta_pos = np.zeros(num_variables)
+    Beta_score = float("inf")
+    
+    Delta_pos = np.zeros(num_variables)
+    Delta_score = float("inf")
+    
+    # Initialize positions of all wolves
+    Positions = np.zeros((num_wolves, num_variables))
+    for i in range(num_variables):
+        Positions[:, i] = np.random.uniform(lb[i], ub[i], num_wolves)
+        
+    # Optimization loop
+    for l in range(max_iter):
+        for i in range(num_wolves):
+            # Boundary checking
+            Positions[i, :] = np.clip(Positions[i, :], lb, ub)
+            
+            # Calculate fitness
+            fitness = obj_func(Positions[i, :])
+            
+            # Update Alpha, Beta, and Delta
+            if fitness < Alpha_score:
+                Delta_score = Beta_score
+                Delta_pos = Beta_pos.copy()
+                Beta_score = Alpha_score
+                Beta_pos = Alpha_pos.copy()
+                Alpha_score = fitness
+                Alpha_pos = Positions[i, :].copy()
+                
+            elif fitness < Beta_score:
+                Delta_score = Beta_score
+                Delta_pos = Beta_pos.copy()
+                Beta_score = fitness
+                Beta_pos = Positions[i, :].copy()
+                
+            elif fitness < Delta_score:
+                Delta_score = fitness
+                Delta_pos = Positions[i, :].copy()
+                
+        a = 2 - l * (2 / max_iter)  # 'a' decreases linearly from 2 to 0
+        
+        # Update the position of all wolves
+        for i in range(num_wolves):
+            for j in range(num_variables):
+                # Update based on Alpha
+                r1, r2 = np.random.rand(), np.random.rand()
+                A1 = 2 * a * r1 - a
+                C1 = 2 * r2
+                D_alpha = abs(C1 * Alpha_pos[j] - Positions[i, j])
+                X1 = Alpha_pos[j] - A1 * D_alpha
+                
+                # Update based on Beta
+                r1, r2 = np.random.rand(), np.random.rand()
+                A2 = 2 * a * r1 - a
+                C2 = 2 * r2
+                D_beta = abs(C2 * Beta_pos[j] - Positions[i, j])
+                X2 = Beta_pos[j] - A2 * D_beta
+                
+                # Update based on Delta
+                r1, r2 = np.random.rand(), np.random.rand()
+                A3 = 2 * a * r1 - a
+                C3 = 2 * r2
+                D_delta = abs(C3 * Delta_pos[j] - Positions[i, j])
+                X3 = Delta_pos[j] - A3 * D_delta
+                
+                # New position is the average of the three
+                Positions[i, j] = (X1 + X2 + X3) / 3
+                
+        print(f"Iteration {l+1}/{max_iter} - Best Fitness (ITAE): {Alpha_score:.4f}")
+        
+    return Alpha_pos, Alpha_score
+
+# 4. Run Optimization
+best_gains, best_score = grey_wolf_optimizer(fitness_function)
+Kp_opt, Ki_opt, Kd_opt = best_gains
+
+print(f"\nOptimized PID Parameters:\nKp = {Kp_opt:.4f}\nKi = {Ki_opt:.4f}\nKd = {Kd_opt:.4f}")
+
+# 5. Plot Results
+t, y, err = simulate_system(Kp_opt, Ki_opt, Kd_opt)
+plt.figure(figsize=(10, 5))
+plt.plot(t, np.ones_like(t), 'r--', label='Target Setpoint')
+plt.plot(t, y, 'b-', label='Optimized PID Response')
+plt.title('System Response with GWO Optimized PID Gains')
+plt.xlabel('Time (s)')
+plt.ylabel('Position')
+plt.legend()
+plt.grid(True)
+plt.show()
+
